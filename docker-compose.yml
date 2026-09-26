@@ -1,0 +1,7 @@
+services:
+  yiwen:
+    build: .
+    container_name: yiwen-duidutai
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

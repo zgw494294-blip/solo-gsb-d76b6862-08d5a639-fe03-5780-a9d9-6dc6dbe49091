@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>异文对读台</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>异文对读台</h1>
+    <p class="subtitle">以底本为坐标，对读 2～4 份具名抄本；按全局最小编辑距离对齐，逐字列出异文，并对一份待鉴文本做来源分段、构造抄本异文距离树。</p>
+  </header>
+
+  <main>
+    <section class="card" id="input-section">
+      <h2>一、录入文本</h2>
+      <div class="fld">
+        <div class="fld-head">
+          <span class="fld-label">底本</span>
+          <span class="counter" id="base-counter">0/300</span>
+        </div>
+        <textarea id="base-text" rows="3" placeholder="底本文字，1～300 个 Unicode 码点；空白与标点照常参与比较。"></textarea>
+      </div>
+
+      <div id="witness-list"></div>
+
+      <div class="fld">
+        <div class="fld-head">
+          <span class="fld-label">待鉴文本</span>
+          <span class="counter" id="query-counter">0/300</span>
+        </div>
+        <textarea id="query-text" rows="3" placeholder="待鉴来源的文本，1～300 个 Unicode 码点；留空则仅对读，不做来源分段。"></textarea>
+      </div>
+
+      <div class="btn-row">
+        <button id="btn-add-witness" class="btn" type="button">＋ 添加抄本</button>
+        <button id="btn-example" class="btn" type="button">填入示例</button>
+        <button id="btn-collate" class="btn btn-primary" type="button">开始对读</button>
+      </div>
+      <div id="error" class="error hidden"></div>
+    </section>
+
+    <section class="card hidden" id="results">
+      <h2>二、对读结果</h2>
+      <div class="result-bar">
+        <span id="summary"></span>
+        <button id="btn-download" class="btn" type="button">下载 JSON</button>
+      </div>
+      <div class="result-cols">
+        <div class="col-entries">
+          <h3>差异位置（点击条目可高亮各原文位置；点选读法可校定）</h3>
+          <div id="entry-list"></div>
+        </div>
+        <div class="col-texts">
+          <h3>原文对照</h3>
+          <div id="text-panels"></div>
+        </div>
+      </div>
+
+      <div class="edition-box">
+        <h3>三、校定稿</h3>
+        <p class="edition-hint">在每个差异条目中点选底本读法（默认）或任一抄本读法；字符位可选「（缺字）」，间隙可选「（无插入）」。校定文本随选择实时更新。</p>
+        <div class="result-bar">
+          <span id="edition-summary"></span>
+          <button id="btn-download-edition" class="btn" type="button">下载校定文本（UTF-8）</button>
+        </div>
+        <div id="edition-error" class="error hidden"></div>
+        <div id="edition-preview" class="edition-preview"></div>
+      </div>
+
+      <div class="provenance-box">
+        <h3>四、待鉴文本来源分段</h3>
+        <p class="edition-hint">只在抄本读法不全相同的坐标（鉴别坐标）为待鉴文本指派来源：读法相同计 0、不同计 1，相邻鉴别坐标换源另计 2；取总分最低的完整来源路径，同分先比换源次数，再比来源序列字典序。</p>
+        <div id="provenance-error" class="error hidden"></div>
+        <div id="provenance-result" class="provenance-result"></div>
+      </div>
+
+      <div class="relationships-box">
+        <h3>五、抄本异文距离树</h3>
+        <p class="edition-hint">只取抄本读法不全相同的字符位与间隙（鉴别坐标）；两份抄本的距离为这些坐标上读法不同的次数。按距离升序、两端录入序号升序选边，构造连接全部抄本的最小生成树；逐一剔除鉴别坐标重算树，标注每条边被保留的次数与比例。点击树边可展开两端读法不同的坐标。</p>
+        <div id="relationships-error" class="error hidden"></div>
+        <div id="relationships-result" class="relationships-result"></div>
+      </div>
+
+      <div class="audit-box">
+        <h3>六、最优对齐路径审计</h3>
+        <p class="edition-hint">沿用同一套编辑代价，精确统计每份抄本的最小代价操作路径数（不同操作序列算不同路径，以十进制字符串显示）。路径数大于 1 时，按「匹配＜替换＜删除＜插入」的操作序列字典序求严格次小的路径；点击抄本条目可展开它与现行首条路径在底本字符／间隙坐标上的读法与抄本码点半开区间差别。</p>
+        <div id="audit-error" class="error hidden"></div>
+        <div id="audit-result" class="audit-result"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>坐标：第 k 字（1 起）与间隙 g（0＝文首，m＝文末）。对齐：匹配 0、替换／删除／插入 1；并列路径按「匹配＜替换＜删除＜插入」的操作序列字典序取舍。</p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
