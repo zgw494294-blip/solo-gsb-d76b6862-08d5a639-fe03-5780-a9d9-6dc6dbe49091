@@ -12,7 +12,17 @@
 - 字符坐标：底本第 1 字 … 第 m 字（1 起计）。
 - 间隙坐标：间隙 0（文首）… 间隙 m（文末），间隙 g 位于第 g 字之后、
   第 g+1 字之前，首尾间隙一并计入。
+
+共享对齐快照
+------------
+- 每对（底本，文本）的最小代价表、字典序首条路径及其坐标读法构成一份
+  对齐快照，进程内共享（缓存机制见 app.aligncache）：以原样 (底本, 文本)
+  为键，抄本名不进入键；同键并发只计算一次，其余调用等待并复用结果。
+- 最多保留 8 份已完成快照，按最近最少使用淘汰；快照内容不可被调用方
+  改写（代价表与路径为不可变结构，坐标读法以深拷贝交出）。
 """
+
+from .aligncache import SnapshotCache
 
 OP_MATCH = "match"
 OP_SUBSTITUTE = "substitute"
@@ -96,8 +106,10 @@ def align(base: str, witness: str):
       ("delete",     i, None) 底本 base[i] 在抄本中缺字
       ("insert",     None, j) 抄本 witness[j] 为插入字
     i、j 均为 0 起索引。
+
+    事件取自进程内共享对齐快照（见 AlignmentSnapshot），返回列表副本。
     """
-    return _greedy_events(base, witness, _cost_table(base, witness))
+    return list(_alignment_snapshot(base, witness).events)
 
 
 def _path_count(base: str, witness: str, cost: list) -> int:
@@ -205,9 +217,63 @@ def _readings_from_events(base: str, witness: str, events: list):
     return char_readings, gap_readings
 
 
+class AlignmentSnapshot:
+    """单对（底本，文本）的共享对齐快照。
+
+    缓存内容：最小代价表 cost、字典序首条路径 events 及其坐标读法。
+    cost 与 events 为元组（不可变），各调用方只读共享；坐标读法一律
+    经 readings() 深拷贝后交出——调用方拿到的副本可自由使用与改写，
+    缓存内容不受影响。
+    """
+
+    __slots__ = ("cost", "events", "_readings")
+
+    def __init__(self, cost, events, readings):
+        self.cost = cost
+        self.events = events
+        self._readings = readings
+
+    def readings(self):
+        """首条路径坐标读法 (char_readings, gap_readings) 的深拷贝。"""
+        char_readings, gap_readings = self._readings
+        return (_copy_readings(char_readings), _copy_readings(gap_readings))
+
+
+def _copy_readings(readings):
+    """逐条复制读法字典与其区间，得到与缓存无关的副本。"""
+    return [
+        {"kind": r["kind"], "reading": r["reading"], "span": list(r["span"])}
+        for r in readings
+    ]
+
+
+def _build_snapshot(base: str, witness: str) -> AlignmentSnapshot:
+    """完整计算一对（底本，文本）的对齐快照（在缓存锁外执行）。"""
+    cost = _cost_table(base, witness)
+    events = _greedy_events(base, witness, cost)
+    readings = _readings_from_events(base, witness, events)
+    return AlignmentSnapshot(
+        tuple(tuple(row) for row in cost),
+        tuple(events),
+        readings,
+    )
+
+
+# 进程内共享对齐快照缓存：以原样 (底本, 文本) 为键，抄本名不进入键；
+# 同键并发只计算一次，其余等待复用；最多 8 份已完成快照，LRU 淘汰。
+_SNAPSHOT_CACHE = SnapshotCache()
+
+
+def _alignment_snapshot(base: str, witness: str) -> AlignmentSnapshot:
+    """取 (base, witness) 的共享对齐快照，缺失时单飞计算。"""
+    return _SNAPSHOT_CACHE.get(
+        (base, witness), lambda: _build_snapshot(base, witness)
+    )
+
+
 def _witness_readings(base: str, witness: str):
-    """现行首条路径（align 的字典序取舍）下的抄本读法。"""
-    return _readings_from_events(base, witness, align(base, witness))
+    """现行首条路径（align 的字典序取舍）下的抄本读法（快照副本）。"""
+    return _alignment_snapshot(base, witness).readings()
 
 
 def _gap_label(g: int, m: int) -> str:
@@ -549,17 +615,21 @@ def alignment_audit(base: str, witnesses: list) -> dict:
 
     返回 {"witnesses": [{"name", "path_count", "alternative"}]}；
     alternative 为 None（路径唯一）或 {"differences": [...]}。
+
+    代价表、首条路径及其坐标读法取自共享对齐快照；路径计数与次小
+    路径在快照的代价表上现算，结果与全量重算一致。
     """
     results = []
     for w in witnesses:
         text = w["text"]
-        cost = _cost_table(base, text)
-        first_events = _greedy_events(base, text, cost)
+        snapshot = _alignment_snapshot(base, text)
+        cost = snapshot.cost
+        first_events = snapshot.events
         count = _path_count(base, text, cost)
         alternative = None
         if count > 1:
             second_events = _second_events(base, text, cost, first_events)
-            first_readings = _readings_from_events(base, text, first_events)
+            first_readings = snapshot.readings()
             second_readings = _readings_from_events(base, text, second_events)
             differences = []
             for type_, idx, coordinate, _br, _span in _iter_coordinates(base):
