@@ -12,7 +12,15 @@
 - 字符坐标：底本第 1 字 … 第 m 字（1 起计）。
 - 间隙坐标：间隙 0（文首）… 间隙 m（文末），间隙 g 位于第 g 字之后、
   第 g+1 字之前，首尾间隙一并计入。
+
+共享快照
+--------
+各接口的对齐结果（最小代价表、字典序首条路径及其坐标读法）经进程内
+共享快照缓存取用：以原样 (底本, 文本) 为键，最多 8 份，LRU 淘汰，
+同键并发只计算一次；命中、淘汰与并发下结果与现算一致。
 """
+
+from .aligncache import AlignmentSnapshotCache
 
 OP_MATCH = "match"
 OP_SUBSTITUTE = "substitute"
@@ -97,7 +105,7 @@ def align(base: str, witness: str):
       ("insert",     None, j) 抄本 witness[j] 为插入字
     i、j 均为 0 起索引。
     """
-    return _greedy_events(base, witness, _cost_table(base, witness))
+    return list(_snapshot(base, witness).events)
 
 
 def _path_count(base: str, witness: str, cost: list) -> int:
@@ -205,9 +213,34 @@ def _readings_from_events(base: str, witness: str, events: list):
     return char_readings, gap_readings
 
 
+def _compute_snapshot(key):
+    """算出 (base, text) 的对齐快照正本：最小代价表、字典序首条路径
+    及其坐标读法。代价表与路径事件转为元组（不可变）后由缓存共享；
+    坐标读法正本由缓存层深拷贝后交付调用方。"""
+    base, text = key
+    cost = _cost_table(base, text)
+    events = _greedy_events(base, text, cost)
+    readings = _readings_from_events(base, text, events)
+    return (
+        tuple(tuple(row) for row in cost),
+        tuple(events),
+        readings,
+    )
+
+
+# 进程内共享对齐快照：以原样 (底本, 文本) 为键（抄本名不进键），
+# 最多保留 8 份已完成快照，按最近最少使用淘汰
+_SNAPSHOTS = AlignmentSnapshotCache(capacity=8, compute=_compute_snapshot)
+
+
+def _snapshot(base: str, text: str):
+    """取 (base, text) 的共享对齐快照视图；未命中或已淘汰则现算。"""
+    return _SNAPSHOTS.get((base, text))
+
+
 def _witness_readings(base: str, witness: str):
     """现行首条路径（align 的字典序取舍）下的抄本读法。"""
-    return _readings_from_events(base, witness, align(base, witness))
+    return _snapshot(base, witness).readings
 
 
 def _gap_label(g: int, m: int) -> str:
@@ -553,13 +586,14 @@ def alignment_audit(base: str, witnesses: list) -> dict:
     results = []
     for w in witnesses:
         text = w["text"]
-        cost = _cost_table(base, text)
-        first_events = _greedy_events(base, text, cost)
+        snap = _snapshot(base, text)
+        cost = snap.cost
+        first_events = snap.events
         count = _path_count(base, text, cost)
         alternative = None
         if count > 1:
             second_events = _second_events(base, text, cost, first_events)
-            first_readings = _readings_from_events(base, text, first_events)
+            first_readings = snap.readings
             second_readings = _readings_from_events(base, text, second_events)
             differences = []
             for type_, idx, coordinate, _br, _span in _iter_coordinates(base):

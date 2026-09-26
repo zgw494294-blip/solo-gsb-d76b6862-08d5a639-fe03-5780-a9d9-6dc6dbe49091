@@ -120,6 +120,23 @@ http://localhost:8000/docs 。
 - 任一录入内容变化或重新对读，旧审计结果立即清空；在途请求的过期响应
   同样作废。
 
+## 对齐快照缓存
+
+- 五个接口（对读、校定、来源分段、距离树、路径审计）共享同一**进程内**
+  对齐快照缓存：以**原样的 (底本, 文本)** 为键，缓存该次对齐的
+  **最小代价表、字典序首条路径及其坐标读法**；路径计数与严格次小路径
+  仍基于缓存的代价表逐请求现算，结果与无缓存一致。
+- **抄本名不进入键**：同文不同名的抄本共享同一快照，响应仍按各自录入
+  分别生成；待鉴文本与底本的对齐同样按 (底本, 待鉴文本) 缓存。
+- 最多保留 **8 份已完成快照**，按**最近最少使用**（LRU）淘汰；同键并发
+  请求只计算一次，其余请求等待并复用结果；计算失败会唤醒等待者且不留
+  残态，后续请求可重试；计算过程不占用缓存全局锁。
+- 交付调用方的坐标读法为私有副本，代价表与路径事件为不可变结构，缓存
+  内容不会被调用方改写；命中、淘汰与并发下各接口的校验、坐标、路径数
+  与响应内容均保持原有结果。
+- 缓存仅在进程内有效：重启即清空，不写磁盘；`docker compose up --build`
+  与 http://localhost:8000 的使用方式不变。
+
 ## API
 
 `POST /api/collate`
@@ -243,13 +260,15 @@ http://localhost:8000/docs 。
 ```
 app/
   main.py            FastAPI 入口与参数校验（/api/collate、/api/edition、/api/provenance、/api/relationships、/api/alignment-audit）
-  collation.py       最小编辑距离对齐 + 异文汇总 + 校定稿拼合 + 待鉴来源分段 + 抄本异文距离树 + 最优对齐路径审计
+  collation.py       最小编辑距离对齐 + 异文汇总 + 校定稿拼合 + 待鉴来源分段 + 抄本异文距离树 + 最优对齐路径审计（对齐结果经共享快照缓存取用）
+  aligncache.py      进程内共享对齐快照缓存（(底本, 文本) 为键，8 份 LRU，同键单次计算）
   static/
     index.html       页面（应用入口 http://localhost:8000/）
     style.css        样式
     app.js           前端逻辑
 tests/
   test_collation.py  对齐、校勘、校定、来源分段、距离树与路径审计测试（python3 tests/test_collation.py）
+  test_aligncache.py 对齐快照缓存与缓存下结果一致性测试（python3 tests/test_aligncache.py）
 Dockerfile
 docker-compose.yml   docker compose up --build 即启动应用（端口 8000）
 requirements.txt
